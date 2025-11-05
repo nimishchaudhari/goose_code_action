@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     if: contains(github.event.comment.body, '@goose')
     steps:
-      - uses: <your-org>/goose_code_action@v1
+      - uses: nimishchaudhari/goose_code_action@v1
         with:
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
           openai_host: ${{ secrets.OPENAI_HOST }}
