@@ -54,6 +54,7 @@ runs:
         fi
         echo "INSTRUCTIONS=$INSTRUCTIONS" >> $GITHUB_ENV
         echo "ISSUE_NUMBER=$ISSUE_NUMBER" >> $GITHUB_ENV
+        echo "BASE_BRANCH=${{ github.ref_name }}" >> $GITHUB_ENV  # e.g., main
     - name: Install Goose CLI
       shell: bash
       run: |
@@ -78,7 +79,11 @@ runs:
     - name: Create Instructions File
       shell: bash
       run: |
-        echo "${{ env.INSTRUCTIONS }}" > instructions.txt
+        cat <<EOF > instructions.txt
+        /mode auto
+        /builtin developer
+        Execute the following task using shell commands for all Git operations. Create a new branch first with 'git checkout -b goose-task-$(date +%s)'. After making changes and committing, push with 'git push origin HEAD'. Then create the PR with 'gh pr create --title "Goose: ${{ env.INSTRUCTIONS }}" --body "Automated changes by Goose" --base ${{ env.BASE_BRANCH }}'. Task: ${{ env.INSTRUCTIONS }}
+        EOF
     - name: Create Initial Progress Comment
       if: env.ISSUE_NUMBER != ''
       shell: bash
@@ -100,8 +105,9 @@ runs:
       env:
         OPENAI_API_KEY: ${{ inputs.openai_api_key }}
         OPENAI_HOST: ${{ inputs.openai_host }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}  # Add for gh and git auth
       run: |
-        goose run --instructions instructions.txt --no-session --with-builtin "developer,computercontroller"  ${{ inputs.goose_args }} | \
+        goose run --instructions instructions.txt --no-session --with-builtin developer ${{ inputs.goose_args }} | \
           sed -E 's/\x1B\[[0-9;]*[mK]//g' | \
           grep -v "logging to /home/runner/.config/goose/sessions/" | \
           grep -v "^starting session" | \
@@ -117,15 +123,19 @@ runs:
         gh api repos/${{ github.repository }}/issues/comments/${{ env.COMMENT_ID }} -X PATCH -f body='Goose processing:\n- [x] Installing and configuring\n- [x] Running task\n- [ ] Posting results'
     - name: Fallback Commit and PR Creation (if changes detected)
       shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
-        if git diff --quiet; then
-          echo "No changes detected; skipping commit/PR."
+        git fetch origin
+        if ! git diff --quiet || [ $(git rev-list HEAD...origin/${{ env.BASE_BRANCH }} --count) -gt 0 ]; then
+          BRANCH_NAME="goose-task-$(date +%s)"
+          git checkout -b $BRANCH_NAME || true  # If already on new branch
+          git add . || true
+          git commit -m "Goose automated changes: ${{ env.INSTRUCTIONS }}" || echo "No new changes to commit."
+          git push origin $BRANCH_NAME
+          gh pr create --title "Goose: ${{ env.INSTRUCTIONS }}" --body "Automated changes by Goose based on instructions." --base ${{ env.BASE_BRANCH }}
         else
-          git checkout -b goose/$(date +%s)
-          git add .
-          git commit -m "Goose automated changes: ${{ env.INSTRUCTIONS }}" || echo "No changes to commit."
-          git push origin HEAD
-          gh pr create --title "Goose: ${{ env.INSTRUCTIONS }}" --body "Automated changes by Goose based on instructions." --base ${{ github.ref_name }}
+          echo "No changes or unpushed commits detected; skipping."
         fi
     - name: Post Final Results
       if: env.ISSUE_NUMBER != ''
