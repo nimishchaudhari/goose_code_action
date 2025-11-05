@@ -78,7 +78,7 @@ runs:
     - name: Create Instructions File
       shell: bash
       run: |
-        echo "Act as an autonomous code agent in Auto Mode. Complete the following task without asking for clarification or more details. Use shell commands as needed for Git operations. Task: ${{ env.INSTRUCTIONS }}" > instructions.txt
+        echo "${{ env.INSTRUCTIONS }}" > instructions.txt
     - name: Create Initial Progress Comment
       if: env.ISSUE_NUMBER != ''
       shell: bash
