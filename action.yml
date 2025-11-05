@@ -70,10 +70,15 @@ runs:
         GOOSE_MODEL: ${{ inputs.openai_model }}
         keyring: false
         EOF
+    - name: Setup Git for Commits
+      shell: bash
+      run: |
+        git config --global user.name "Goose Bot"
+        git config --global user.email "goose@users.noreply.github.com"
     - name: Create Instructions File
       shell: bash
       run: |
-        echo "${{ env.INSTRUCTIONS }}" > instructions.txt
+        echo "Act as an autonomous code agent in Auto Mode. Complete the following task without asking for clarification or more details. Use shell commands as needed for Git operations. Task: ${{ env.INSTRUCTIONS }}" > instructions.txt
     - name: Create Initial Progress Comment
       if: env.ISSUE_NUMBER != ''
       shell: bash
@@ -110,6 +115,18 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
         gh api repos/${{ github.repository }}/issues/comments/${{ env.COMMENT_ID }} -X PATCH -f body='Goose processing:\n- [x] Installing and configuring\n- [x] Running task\n- [ ] Posting results'
+    - name: Fallback Commit and PR Creation (if changes detected)
+      shell: bash
+      run: |
+        if git diff --quiet; then
+          echo "No changes detected; skipping commit/PR."
+        else
+          git checkout -b goose/$(date +%s)
+          git add .
+          git commit -m "Goose automated changes: ${{ env.INSTRUCTIONS }}" || echo "No changes to commit."
+          git push origin HEAD
+          gh pr create --title "Goose: ${{ env.INSTRUCTIONS }}" --body "Automated changes by Goose based on instructions." --base ${{ github.ref_name }}
+        fi
     - name: Post Final Results
       if: env.ISSUE_NUMBER != ''
       shell: bash
