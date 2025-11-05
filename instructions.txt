@@ -1,0 +1,30 @@
+/mode auto
+/builtin developer
+Execute the task **exactly** as described below using *shell* commands.
+
+1. Create a new branch:
+   ```bash
+   git checkout -b goose-task-$(date +%s)
+   ```
+
+2. Make the requested file changes (use `text_editor` when needed).
+
+3. Stage & commit:
+   ```bash
+   git add .
+   git commit -m "Goose: Create a hello_world.py file with content print('Hello, World!'). Then add, commit with message "Add hello world Python program", push, and open a PR titled "Add hello world program"."
+   ```
+
+4. Push:
+   ```bash
+   git push origin HEAD
+   ```
+
+5. Create PR:
+   ```bash
+   gh pr create --title "Goose: Create a hello_world.py file with content print('Hello, World!'). Then add, commit with message "Add hello world Python program", push, and open a PR titled "Add hello world program"." \
+                --body "Automated changes by Goose" \
+                --base main
+   ```
+
+**User task:** Create a hello_world.py file with content print('Hello, World!'). Then add, commit with message "Add hello world Python program", push, and open a PR titled "Add hello world program".
