@@ -1,5 +1,5 @@
 name: 'Goose Code Action'
-description: 'AI-powered code automation with Goose, mirroring Claude Code features'
+description: 'AI-powered code automation with Goose – live progress + PR link'
 inputs:
   instructions:
     description: 'Prompt/instructions for Goose (e.g., from comment)'
@@ -8,16 +8,16 @@ inputs:
     description: 'Additional CLI args for Goose (e.g., --max-turns 5)'
     required: false
   openai_api_key:
-    description: 'OpenAI API key'
+    description: 'OpenAI-compatible API key'
     required: true
   openai_host:
-    description: 'OpenAI-compatible host (e.g., custom endpoint)'
+    description: 'OpenAI-compatible host (optional)'
     required: false
   openai_model:
-    description: 'Model name (e.g., gpt-4o)'
+    description: 'Model name (e.g., gpt-4o, Qwen3-…)'
     required: true
   github_token:
-    description: 'GitHub token for API access'
+    description: 'GitHub token (needs repo, issues, pull-requests)'
     required: true
   trigger_phrase:
     description: 'Mention trigger (default: @goose)'
@@ -26,11 +26,15 @@ inputs:
 runs:
   using: 'composite'
   steps:
+
+    # -------------------------------------------------
+    # 1. Checkout + gather event data
+    # -------------------------------------------------
     - name: Checkout repo
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0  # For full history/diffs
-    - name: Gather Event Info (if applicable)
+      with: { fetch-depth: 0 }
+
+    - name: Gather Event Info
       if: github.event_name == 'pull_request' || github.event_name == 'issue_comment'
       shell: bash
       run: |
@@ -39,22 +43,23 @@ runs:
           ISSUE_NUMBER=${{ github.event.issue.number }}
         elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
           ISSUE_NUMBER=${{ github.event.pull_request.number }}
-          # Gather changes like in docs
-          {
-            echo "# Files Changed"
+          { echo "# Files Changed"
             gh pr view $ISSUE_NUMBER --json files -q '.files[] | "* " + .path + " (" + (.additions|tostring) + " additions, " + (.deletions|tostring) + " deletions)"'
-            echo ""
-            echo "# Changes Summary"
+            echo; echo "# Changes Summary"
             gh pr diff $ISSUE_NUMBER
           } > changes.txt
           INSTRUCTIONS="Summarize and review the following changes:\n$(cat changes.txt)"
         else
-          ISSUE_NUMBER=${{ github.event.issue.number }}  # Fallback
           INSTRUCTIONS="${{ inputs.instructions }}"
+          ISSUE_NUMBER=${{ github.event.issue.number }}
         fi
         echo "INSTRUCTIONS=$INSTRUCTIONS" >> $GITHUB_ENV
         echo "ISSUE_NUMBER=$ISSUE_NUMBER" >> $GITHUB_ENV
-        echo "BASE_BRANCH=${{ github.ref_name }}" >> $GITHUB_ENV  # e.g., main
+        echo "BASE_BRANCH=${{ github.ref_name }}" >> $GITHUB_ENV
+
+    # -------------------------------------------------
+    # 2. Install Goose CLI
+    # -------------------------------------------------
     - name: Install Goose CLI
       shell: bash
       run: |
@@ -62,6 +67,10 @@ runs:
         curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh \
           | CONFIGURE=false GOOSE_BIN_DIR=/home/runner/.local/bin bash
         echo "/home/runner/.local/bin" >> $GITHUB_PATH
+
+    # -------------------------------------------------
+    # 3. Configure Goose (provider, model, keyring)
+    # -------------------------------------------------
     - name: Configure Goose
       shell: bash
       run: |
@@ -71,74 +80,127 @@ runs:
         GOOSE_MODEL: ${{ inputs.openai_model }}
         keyring: false
         EOF
+
+    # -------------------------------------------------
+    # 4. Git identity (needed for commits)
+    # -------------------------------------------------
     - name: Setup Git for Commits
       shell: bash
       run: |
         git config --global user.name "Goose Bot"
         git config --global user.email "goose@users.noreply.github.com"
+
+    # -------------------------------------------------
+    # 5. Build the *instructions.txt* that forces full automation
+    # -------------------------------------------------
     - name: Create Instructions File
       shell: bash
       run: |
-        cat <<EOF > instructions.txt
+        cat <<'EOF' > instructions.txt
         /mode auto
         /builtin developer
-        Execute the following task using shell commands for all Git operations. Create a new branch first with 'git checkout -b goose-task-$(date +%s)'. After making changes and committing, push with 'git push origin HEAD'. Then create the PR with 'gh pr create --title "Goose: ${{ env.INSTRUCTIONS }}" --body "Automated changes by Goose" --base ${{ env.BASE_BRANCH }}'. Task: ${{ env.INSTRUCTIONS }}
+        Execute the task **exactly** as described below using *shell* commands.
+        1. Create a new branch: `git checkout -b goose-task-$(date +%s)`
+        2. Make the requested file changes (use `text_editor` when needed)
+        3. Stage & commit: `git add . && git commit -m "Goose: ${{ env.INSTRUCTIONS }}"` (or the exact message you specify)
+        4. Push: `git push origin HEAD`
+        5. Create PR: `gh pr create --title "Goose: ${{ env.INSTRUCTIONS }}" --body "Automated changes by Goose" --base ${{ env.BASE_BRANCH }}`
+        Task: ${{ env.INSTRUCTIONS }}
         EOF
+
+    # -------------------------------------------------
+    # 6. Create **initial** progress comment
+    # -------------------------------------------------
     - name: Create Initial Progress Comment
       if: env.ISSUE_NUMBER != ''
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
-        COMMENT_BODY='Goose processing (live log):\n\n(Initializing...)\n\nProgress:\n- [ ] Installing and configuring\n- [ ] Running task\n- [ ] Posting results'
-        COMMENT_ID=$(gh api repos/${{ github.repository }}/issues/${{ env.ISSUE_NUMBER }}/comments -f body="$COMMENT_BODY" --jq .id)
+        BODY="Goose processing (live log):\n\n(Initializing...)\n\nProgress:\n- [ ] Installing and configuring\n- [ ] Running task\n- [ ] Posting results"
+        COMMENT_ID=$(gh api \
+          -X POST \
+          -F body="$BODY" \
+          "repos/${{ github.repository }}/issues/${{ env.ISSUE_NUMBER }}/comments" \
+          --jq .id)
         echo "COMMENT_ID=$COMMENT_ID" >> $GITHUB_ENV
-    - name: Update Progress - Configured
+
+    # -------------------------------------------------
+    # 7. Update after config (first checkbox)
+    # -------------------------------------------------
+    - name: Update Progress – Configured
       if: env.COMMENT_ID != ''
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
-        gh api repos/${{ github.repository }}/issues/comments/${{ env.COMMENT_ID }} -X PATCH -f body='Goose processing (live log):\n\n(Configured Goose and Git...)\n\nProgress:\n- [x] Installing and configuring\n- [ ] Running task\n- [ ] Posting results'
+        BODY="Goose processing (live log):\n\n(Configured Goose & Git...)\n\nProgress:\n- [x] Installing and configuring\n- [ ] Running task\n- [ ] Posting results"
+        gh api \
+          -X PATCH \
+          -F body="$BODY" \
+          "repos/${{ github.repository }}/issues/comments/${{ env.COMMENT_ID }}" > /dev/null
+
+    # -------------------------------------------------
+    # 8. Run Goose (captures **all** output)
+    # -------------------------------------------------
     - name: Run Goose
       shell: bash
       env:
         OPENAI_API_KEY: ${{ inputs.openai_api_key }}
         OPENAI_HOST: ${{ inputs.openai_host }}
-        GITHUB_TOKEN: ${{ inputs.github_token }}  # Add for gh and git auth
+        GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
-        goose run --instructions instructions.txt --no-session --with-builtin developer ${{ inputs.goose_args }} | \
-          sed -E 's/\x1B\[[0-9;]*[mK]//g' | \
-          grep -v "logging to /home/runner/.config/goose/sessions/" | \
-          grep -v "^starting session" | \
-          grep -v "^Closing session" | \
-          sed 's/[[:space:]]*$//' \
+        goose run --instructions instructions.txt --no-session --with-builtin developer ${{ inputs.goose_args }} \
+          | sed -E 's/\x1B\[[0-9;]*[mK]//g' \
+          | grep -v "logging to /home/runner/.config/goose/sessions/" \
+          | grep -v "^starting session" \
+          | grep -v "^Closing session" \
+          | sed 's/[[:space:]]*$//' \
           > output.txt
-    - name: Update Progress - Task Run (with Details)
+
+    # -------------------------------------------------
+    # 9. Update comment with *milestones* (feels live)
+    # -------------------------------------------------
+    - name: Update Progress – Task Run (milestones)
       if: env.COMMENT_ID != ''
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
-        # Parse output for key milestones (e.g., tool calls)
-        MILESTONES=$(grep -E '───|Great!|Successfully|I've successfully' output.txt | sed 's/^/  - /')
-        gh api repos/${{ github.repository }}/issues/comments/${{ env.COMMENT_ID }} -X PATCH -f body="Goose processing (live log):\n\n$MILESTONES\n\nProgress:\n- [x] Installing and configuring\n- [x] Running task\n- [ ] Posting results"
-    - name: Fallback Commit and PR Creation (if changes detected)
+        # Grab every tool-call line + any “Great!”/“Successfully” line
+        MILESTONES=$(grep -E '───|Great!|Successfully|created the pull request' output.txt \
+                     | sed 's/^/  - /')
+        BODY="Goose processing (live log):\n\n$MILESTONES\n\n---\n\nProgress:\n- [x] Installing and configuring\n- [x] Running task\n- [ ] Posting results"
+        gh api \
+          -X PATCH \
+          -F body="$BODY" \
+          "repos/${{ github.repository }}/issues/comments/${{ env.COMMENT_ID }}" > /dev/null
+
+    # -------------------------------------------------
+    # 10. Fallback: push & PR if Goose forgot
+    # -------------------------------------------------
+    - name: Fallback Commit & PR
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
         git fetch origin
         if ! git diff --quiet || [ $(git rev-list HEAD...origin/${{ env.BASE_BRANCH }} --count) -gt 0 ]; then
-          BRANCH_NAME="goose-task-$(date +%s)"
-          git checkout -b $BRANCH_NAME || true  # If already on new branch
+          BRANCH="goose-task-$(date +%s)"
+          git checkout -b "$BRANCH" || true
           git add . || true
-          git commit -m "Goose automated changes: ${{ env.INSTRUCTIONS }}" || echo "No new changes to commit."
-          git push origin $BRANCH_NAME
-          gh pr create --title "Goose: ${{ env.INSTRUCTIONS }}" --body "Automated changes by Goose based on instructions." --base ${{ env.BASE_BRANCH }}
+          git commit -m "Goose fallback: ${{ env.INSTRUCTIONS }}" || echo "nothing to commit"
+          git push origin "$BRANCH"
+          gh pr create --title "Goose fallback: ${{ env.INSTRUCTIONS }}" \
+                       --body "Automated fallback after Goose run" \
+                       --base ${{ env.BASE_BRANCH }}
         else
-          echo "No changes or unpushed commits detected; skipping."
+          echo "No changes or unpushed commits → skipping fallback"
         fi
+
+    # -------------------------------------------------
+    # 11. Final comment – full log + **PR link**
+    # -------------------------------------------------
     - name: Post Final Results
       if: env.ISSUE_NUMBER != ''
       shell: bash
@@ -146,14 +208,29 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
         RESULT=$(cat output.txt)
-        # Parse PR URL/number for tagging
+
+        # ---- extract PR URL (most Goose runs print it) ----
         PR_URL=$(echo "$RESULT" | grep -oE 'https://github\.com/[^/]+/[^/]+/pull/[0-9]+' | head -1)
-        PR_TAG=$(echo "$PR_URL" | grep -oE '[0-9]+$')  # e.g., 2
-        if [ -n "$PR_URL" ]; then
-          RESULT="$RESULT\n\n**Linked PR:** [#$PR_TAG]($PR_URL)"
+        if [ -z "$PR_URL" ]; then
+          # fallback: look at the most recent PR created by the bot
+          PR_URL=$(gh pr list --json url --author "app/github-actions" --limit 1 --jq '.[0].url // empty')
         fi
-        gh api repos/${{ github.repository }}/issues/comments/${{ env.COMMENT_ID }} -X PATCH -f body="Goose results:\n\n\`\`\`\n$RESULT\n\`\`\`\n\nProgress:\n- [x] Installing and configuring\n- [x] Running task\n- [x] Posting results"
-    - name: Output Results (for non-issue events)
+
+        if [ -n "$PR_URL" ]; then
+          PR_NUM=$(basename "$PR_URL")
+          RESULT="${RESULT}\n\n**Linked PR:** [#${PR_NUM}](${PR_URL})"
+        fi
+
+        BODY="Goose results:\n\n\`\`\`\n${RESULT}\n\`\`\`\n\nProgress:\n- [x] Installing and configuring\n- [x] Running task\n- [x] Posting results"
+        gh api \
+          -X PATCH \
+          -F body="$BODY" \
+          "repos/${{ github.repository }}/issues/comments/${{ env.COMMENT_ID }}" > /dev/null
+
+    # -------------------------------------------------
+    # 12. Non-issue events (scheduled, workflow_dispatch…)
+    # -------------------------------------------------
+    - name: Output Results (non-issue)
       if: env.ISSUE_NUMBER == ''
       shell: bash
       run: cat output.txt
