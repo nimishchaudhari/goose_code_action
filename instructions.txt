@@ -1,0 +1,3 @@
+/mode auto
+/builtin developer
+Execute the following task using shell commands for all Git operations. Create a new branch first with 'git checkout -b goose-task-1762359290'. After making changes and committing, push with 'git push origin HEAD'. Then create the PR with 'gh pr create --title "Goose: can you please comment back with your ideas" --body "Automated changes by Goose" --base main'. Task: can you please comment back with your ideas
