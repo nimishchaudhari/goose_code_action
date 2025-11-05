@@ -28,7 +28,7 @@ runs:
   steps:
 
     # -------------------------------------------------
-    # 1. Checkout + gather event data
+    # 1. Checkout + gather event data (FIXED for special chars)
     # -------------------------------------------------
     - name: Checkout repo
       uses: actions/checkout@v4
@@ -38,10 +38,16 @@ runs:
       if: github.event_name == 'pull_request' || github.event_name == 'issue_comment'
       shell: bash
       run: |
-        if [[ "${{ github.event_name }}" == "issue_comment" && "${{ github.event.comment.body }}" == *"${{ inputs.trigger_phrase }}"* ]]; then
-          INSTRUCTIONS=$(echo "${{ github.event.comment.body }}" | sed "s/${{ inputs.trigger_phrase }} //")
+        if [ "${{ github.event_name }}" = "issue_comment" ] && cat <<'EOF' | grep -q "${{ inputs.trigger_phrase }}"
+        ${{ github.event.comment.body }}
+        EOF
+        then
+          INSTRUCTIONS=$(cat <<'EOF' | sed "s/${{ inputs.trigger_phrase }} *//"
+        ${{ github.event.comment.body }}
+        EOF
+          )
           ISSUE_NUMBER=${{ github.event.issue.number }}
-        elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+        elif [ "${{ github.event_name }}" = "pull_request" ]; then
           ISSUE_NUMBER=${{ github.event.pull_request.number }}
           { echo "# Files Changed"
             gh pr view $ISSUE_NUMBER --json files -q '.files[] | "* " + .path + " (" + (.additions|tostring) + " additions, " + (.deletions|tostring) + " deletions)"'
@@ -91,7 +97,7 @@ runs:
         git config --global user.email "goose@users.noreply.github.com"
 
     # -------------------------------------------------
-    # 5. Build the *instructions.txt* that forces full automation
+    # 5. Build the *instructions.txt* that forces full automation (UPDATED for literal handling)
     # -------------------------------------------------
     - name: Create Instructions File
       shell: bash
@@ -118,12 +124,12 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
         BODY="Goose processing (live log):\n\n(Initializing...)\n\nProgress:\n- [ ] Installing and configuring\n- [ ] Running task\n- [ ] Posting results"
-        COMMENT_ID=$(gh api \
+        gh api \
           -X POST \
           -F body="$BODY" \
           "repos/${{ github.repository }}/issues/${{ env.ISSUE_NUMBER }}/comments" \
-          --jq .id)
-        echo "COMMENT_ID=$COMMENT_ID" >> $GITHUB_ENV
+          --jq .id > comment_id.txt
+        echo "COMMENT_ID=$(cat comment_id.txt)" >> $GITHUB_ENV
 
     # -------------------------------------------------
     # 7. Update after config (first checkbox)
@@ -217,7 +223,7 @@ runs:
         fi
 
         if [ -n "$PR_URL" ]; then
-          PR_NUM=$(basename "$PR_URL")
+          PR_NUM=$(echo "$PR_URL" | grep -oE '[0-9]+$')
           RESULT="${RESULT}\n\n**Linked PR:** [#${PR_NUM}](${PR_URL})"
         fi
 
