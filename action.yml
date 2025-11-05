@@ -101,7 +101,7 @@ runs:
         OPENAI_API_KEY: ${{ inputs.openai_api_key }}
         OPENAI_HOST: ${{ inputs.openai_host }}
       run: |
-        goose run --instructions instructions.txt ${{ inputs.goose_args }} | \
+        goose run --instructions instructions.txt --no-session ${{ inputs.goose_args }} | \
           sed -E 's/\x1B\[[0-9;]*[mK]//g' | \
           grep -v "logging to /home/runner/.config/goose/sessions/" | \
           grep -v "^starting session" | \
