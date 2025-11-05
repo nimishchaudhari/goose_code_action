@@ -1,0 +1,19 @@
+name: Goose Code Action
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+jobs:
+  goose:
+    runs-on: ubuntu-latest
+    if: contains(github.event.comment.body, '@goose')
+    steps:
+      - uses: <your-org>/goose_code_action@v1
+        with:
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          openai_host: ${{ secrets.OPENAI_HOST }}
+          openai_model: ${{ secrets.OPENAI_MODEL }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
