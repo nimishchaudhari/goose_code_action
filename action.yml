@@ -1,0 +1,124 @@
+name: 'Goose Code Action'
+description: 'AI-powered code automation with Goose, mirroring Claude Code features'
+inputs:
+  instructions:
+    description: 'Prompt/instructions for Goose (e.g., from comment)'
+    required: false
+  goose_args:
+    description: 'Additional CLI args for Goose (e.g., --max-turns 5)'
+    required: false
+  openai_api_key:
+    description: 'OpenAI API key'
+    required: true
+  openai_host:
+    description: 'OpenAI-compatible host (e.g., custom endpoint)'
+    required: false
+  openai_model:
+    description: 'Model name (e.g., gpt-4o)'
+    required: true
+  github_token:
+    description: 'GitHub token for API access'
+    required: true
+  trigger_phrase:
+    description: 'Mention trigger (default: @goose)'
+    required: false
+    default: '@goose'
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # For full history/diffs
+    - name: Gather Event Info (if applicable)
+      if: github.event_name == 'pull_request' || github.event_name == 'issue_comment'
+      shell: bash
+      run: |
+        if [[ "${{ github.event_name }}" == "issue_comment" && "${{ github.event.comment.body }}" == *"${{ inputs.trigger_phrase }}"* ]]; then
+          INSTRUCTIONS=$(echo "${{ github.event.comment.body }}" | sed "s/${{ inputs.trigger_phrase }} //")
+          ISSUE_NUMBER=${{ github.event.issue.number }}
+        elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          ISSUE_NUMBER=${{ github.event.pull_request.number }}
+          # Gather changes like in docs
+          {
+            echo "# Files Changed"
+            gh pr view $ISSUE_NUMBER --json files -q '.files[] | "* " + .path + " (" + (.additions|tostring) + " additions, " + (.deletions|tostring) + " deletions)"'
+            echo ""
+            echo "# Changes Summary"
+            gh pr diff $ISSUE_NUMBER
+          } > changes.txt
+          INSTRUCTIONS="Summarize and review the following changes:\n$(cat changes.txt)"
+        else
+          ISSUE_NUMBER=${{ github.event.issue.number }}  # Fallback
+          INSTRUCTIONS="${{ inputs.instructions }}"
+        fi
+        echo "INSTRUCTIONS=$INSTRUCTIONS" >> $GITHUB_ENV
+        echo "ISSUE_NUMBER=$ISSUE_NUMBER" >> $GITHUB_ENV
+    - name: Install Goose CLI
+      shell: bash
+      run: |
+        mkdir -p /home/runner/.local/bin
+        curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh \
+          | CONFIGURE=false GOOSE_BIN_DIR=/home/runner/.local/bin bash
+        echo "/home/runner/.local/bin" >> $GITHUB_PATH
+    - name: Configure Goose
+      shell: bash
+      run: |
+        mkdir -p ~/.config/goose
+        cat <<EOF > ~/.config/goose/config.yaml
+        GOOSE_PROVIDER: openai
+        GOOSE_MODEL: ${{ inputs.openai_model }}
+        keyring: false
+        EOF
+    - name: Create Instructions File
+      shell: bash
+      run: |
+        echo "${{ env.INSTRUCTIONS }}" > instructions.txt
+    - name: Create Initial Progress Comment
+      if: env.ISSUE_NUMBER != ''
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+      run: |
+        COMMENT_BODY='Goose processing:\n- [ ] Installing and configuring\n- [ ] Running task\n- [ ] Posting results'
+        COMMENT_ID=$(gh api repos/${{ github.repository }}/issues/${{ env.ISSUE_NUMBER }}/comments -f body="$COMMENT_BODY" --jq .id)
+        echo "COMMENT_ID=$COMMENT_ID" >> $GITHUB_ENV
+    - name: Update Progress - Configured
+      if: env.COMMENT_ID != ''
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+      run: |
+        gh api repos/${{ github.repository }}/issues/comments/${{ env.COMMENT_ID }} -X PATCH -f body='Goose processing:\n- [x] Installing and configuring\n- [ ] Running task\n- [ ] Posting results'
+    - name: Run Goose
+      shell: bash
+      env:
+        OPENAI_API_KEY: ${{ inputs.openai_api_key }}
+        OPENAI_HOST: ${{ inputs.openai_host }}
+      run: |
+        goose run --instructions instructions.txt ${{ inputs.goose_args }} | \
+          sed -E 's/\x1B\[[0-9;]*[mK]//g' | \
+          grep -v "logging to /home/runner/.config/goose/sessions/" | \
+          grep -v "^starting session" | \
+          grep -v "^Closing session" | \
+          sed 's/[[:space:]]*$//' \
+          > output.txt
+    - name: Update Progress - Task Run
+      if: env.COMMENT_ID != ''
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+      run: |
+        gh api repos/${{ github.repository }}/issues/comments/${{ env.COMMENT_ID }} -X PATCH -f body='Goose processing:\n- [x] Installing and configuring\n- [x] Running task\n- [ ] Posting results'
+    - name: Post Final Results
+      if: env.ISSUE_NUMBER != ''
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+      run: |
+        RESULT=$(cat output.txt)
+        gh api repos/${{ github.repository }}/issues/comments/${{ env.COMMENT_ID }} -X PATCH -f body="Goose results:\n\n$RESULT\n\nProgress:\n- [x] Installing and configuring\n- [x] Running task\n- [x] Posting results"
+    - name: Output Results (for non-issue events)
+      if: env.ISSUE_NUMBER == ''
+      shell: bash
+      run: cat output.txt
